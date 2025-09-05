@@ -1,4 +1,4 @@
-print("LOADING FORSAKEN BOT...")
+print("Forsaken bot ran.")
 
 local PathfindingService = game:GetService("PathfindingService")
 
@@ -185,7 +185,7 @@ function PerformElliotAI()
 	local CycleOrder = {"Supports", "Sentinels", "Survivalists"}
 
 	local function parseStamina()
-		local txt = player.PlayerGui.TemporaryUI.PlayerInfo.Bars.Stamina.Amount.Text
+		local txt = player.PlayerGui.TemporaryUI:WaitForChild("PlayerInfo"):WaitForChild("Bars"):WaitForChild("Stamina"):WaitForChild("Amount").Text
 		local cur, mx = txt:match("^(%d+)%s*/%s*(%d+)$")
 		return tonumber(cur), tonumber(mx)
 	end
