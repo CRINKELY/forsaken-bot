@@ -7,7 +7,7 @@ local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 local Window = Rayfield:CreateWindow({
 	Name = "Forsaken Bot",
 	Icon = "square-dashed-bottom-code", -- Icon in Topbar. Can use Lucide Icons (string) or Roblox Image (number). 0 to use no icon (default).
-	LoadingTitle = "Forsaken Bot - v0.03",
+	LoadingTitle = "Forsaken Bot - v0.04",
 	LoadingSubtitle = "Made by @g_rd#0",
 	ShowText = "Rayfield", -- for mobile users to unhide rayfield, change if you'd like
 	Theme = "DarkBlue", -- Check https://docs.sirius.menu/rayfield/configuration/themes
@@ -284,7 +284,6 @@ function PerformElliotAI()
 	local stuckMoveThreshold = 0.5
 	local stuckTimeout = 0.5
 
-	-- Stamina
 	local STAMINA_MAX, STAMINA_DRAIN, STAMINA_GAIN = 100, 10, 20
 	local RESERVE, STOP_THRESHOLD, START_THRESHOLD = 2, 15, 60
 	local stamina = STAMINA_MAX
@@ -298,15 +297,47 @@ function PerformElliotAI()
 	local lastChatTimes = {Throwing = 0, Hurt = 0, Scared = 0}
 
 	local ElliotMessages = {
-		Throwing = {"GET THE PIZZA","GRAB THE PIZZA","PLEASE GET THIS","istg if you dont get this"},
-		Hurt     = {"ow :((","OWWW","oww","HEY >:("},
-		Scared   = {"okay im getting outta here","OKAY BYEBYE","NOT DEALING WITH THIS GUY","time to not do my job :D"}
+		Throwing = {
+			"GET THE PIZZA",
+			"GRAB THE PIZZA",
+			"PLEASE GET THIS",
+			"istg if you dont get this",
+			"HURRY UP WITH IT",
+			"DON'T DROP IT",
+			"HERE COMES THE PIZZA",
+			"CATCH IT!",
+			"TAKE THE PIZZA QUICK",
+			"I NEED THAT PIZZA NOW"
+		},
+		Hurt = {
+			"ow :((",
+			"OWWW",
+			"oww",
+			"HEY >:(",
+			"MY ARM!",
+			"OUCH!",
+			"I'M HURT",
+			"NOT COOL!",
+			"I CAN'T TAKE THIS",
+			"YOWCH!"
+		},
+		Scared = {
+			"okay im getting outta here",
+			"OKAY BYEBYE",
+			"NOT DEALING WITH THIS GUY",
+			"time to not do my job :D",
+			"RUNNING AWAY!",
+			"I'M OUT!",
+			"NOPE NOT TODAY",
+			"CAN'T FIGHT THIS",
+			"SEE YA!",
+			"BETTER GET SOME DISTANCE"
+		}
 	}
 
 	local function ChatRandomMessage(messageType)
 		local now = tick()
-		-- throttle: 5 sec minimum between same type messages
-		if now - (lastChatTimes[messageType] or 0) >= 5 then
+		if now - (lastChatTimes[messageType] or 0) >= 15 then
 			local channel = TextService.TextChannels:FindFirstChild("RBXGeneral")
 			if channel then
 				local msgTable = ElliotMessages[messageType]
@@ -361,9 +392,31 @@ function PerformElliotAI()
 		lastTargetSwitch = tick()
 		if currentTarget and currentTarget:FindFirstChild("HumanoidRootPart") then
 			local success, stopFunc = pcall(function()
-				return Pathfind(player.Character.Humanoid, currentTarget.HumanoidRootPart, {recomputeDelay = 0.12})
+				-- Pathfind regardless of sprinting; always try to follow target
+				return Pathfind(player.Character.Humanoid, currentTarget.HumanoidRootPart, {recomputeDelay = 0.1, closeEnough = 2})
 			end)
 			if success and type(stopFunc) == "function" then currentPathStop = stopFunc end
+		end
+	end
+
+	local function pickFarthestTarget()
+		local farthest, farD = nil, nil
+		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+			local pos = player.Character.HumanoidRootPart.Position
+			for _, s in ipairs(orderedTargets) do
+				if s and s:FindFirstChild("HumanoidRootPart") then
+					local d = (s.HumanoidRootPart.Position - pos).Magnitude
+					if not farthest or d > farD then farthest, farD = s, d end
+				end
+			end
+		end
+		return farthest
+	end
+
+	local function forceWalkSpeed(speed)
+		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		if hum then
+			hum.WalkSpeed = speed
 		end
 	end
 
@@ -383,32 +436,19 @@ function PerformElliotAI()
 		end)
 	end
 
-	local function pickFarthestTarget()
-		local farthest, farD = nil, nil
-		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-			local pos = player.Character.HumanoidRootPart.Position
-			for _, s in ipairs(orderedTargets) do
-				if s and s:FindFirstChild("HumanoidRootPart") then
-					local d = (s.HumanoidRootPart.Position - pos).Magnitude
-					if not farthest or d > farD then farthest, farD = s, d end
-				end
-			end
-		end
-		return farthest
-	end
-
 	-- Main loop
 	while GameState == "Ingame" and BotToggle.CurrentValue == true do
 		rebuildOrderedTargets()
 
-		-- Ensure AI moves even if idle
+		if #SRV:GetChildren() == 1 then
+			local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+			if hum then hum.Health = 0 end
+		end
+
+		-- Ensure target exists
 		if not currentTarget and #orderedTargets > 0 then
 			currentIndex = 1
 			switchToTarget(orderedTargets[currentIndex])
-		end
-
-		if #SRV:GetChildren() == 1 then
-			player.Character.Humanoid.Health = 0
 		end
 
 		-- Stamina logic
@@ -426,13 +466,21 @@ function PerformElliotAI()
 				stamina = math.min(STAMINA_MAX, stamina + STAMINA_GAIN*checkInterval)
 			end
 		end
+
+		-- Always enforce state WalkSpeed regardless of other effects
+		if sprinting then
+			forceWalkSpeed(26)
+		else
+			forceWalkSpeed(16)
+		end
+
 		if not sprinting and stamina >= START_THRESHOLD and currentTarget then
 			sprinting = true
 			Sprint(true)
 			if not currentPathStop then switchToTarget(currentTarget) end
 		end
 
-		-- Proximity switch
+		-- Cycle targets if proximity
 		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
 			local pr = player.Character.HumanoidRootPart.Position
 			for i, s in ipairs(orderedTargets) do
@@ -447,7 +495,7 @@ function PerformElliotAI()
 			end
 		end
 
-		-- Scared behavior: run to far away survivor briefly
+		-- Scared behavior
 		local scared = isKillerClose() or (tick() - lastHitTime <= 10)
 		if scared then
 			ChatRandomMessage("Scared")
@@ -456,9 +504,16 @@ function PerformElliotAI()
 				switchToTarget(farTarget)
 				sprinting = true
 				Sprint(true)
-				task.wait(math.random(1,3)) -- briefly move to gain distance
-				Sprint(false)
+				forceWalkSpeed(26)
+				task.wait(math.random(1,3)) -- briefly move away
 				sprinting = false
+				Sprint(false)
+				forceWalkSpeed(16)
+				-- return to normal target after fleeing
+				if #orderedTargets > 0 then
+					currentIndex = 1
+					switchToTarget(orderedTargets[currentIndex])
+				end
 			end
 		end
 
