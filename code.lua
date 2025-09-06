@@ -7,7 +7,7 @@ local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 local Window = Rayfield:CreateWindow({
 	Name = "Forsaken Bot",
 	Icon = "square-dashed-bottom-code", -- Icon in Topbar. Can use Lucide Icons (string) or Roblox Image (number). 0 to use no icon (default).
-	LoadingTitle = "Forsaken Bot - v0.06",
+	LoadingTitle = "Forsaken Bot - v0.07",
 	LoadingSubtitle = "Made by @g_rd#0",
 	ShowText = "Rayfield", -- for mobile users to unhide rayfield, change if you'd like
 	Theme = "DarkBlue", -- Check https://docs.sirius.menu/rayfield/configuration/themes
@@ -103,7 +103,7 @@ function Pathfind(humanoid, target, opts)
 	end
 
 	opts = opts or {}
-	local delay      = opts.recomputeDelay or 0.5 -- a bit higher to avoid spamming
+	local delay = opts.recomputeDelay or 0.5 -- recompute delay
 	local agentParms = opts.agentParams or {
 		AgentRadius   = 2.2,
 		AgentHeight   = 5,
@@ -113,20 +113,34 @@ function Pathfind(humanoid, target, opts)
 
 	local alive = true
 
+	local function SmoothMove(hrp, wpPos, speed)
+		if not hrp then return end
+		local startPos = hrp.Position
+		local distance = (wpPos - startPos).Magnitude
+		if distance == 0 then return end
+		local direction = (wpPos - startPos).Unit
+		local traveled = 0
+		local conn
+		conn = game:GetService("RunService").RenderStepped:Connect(function(dt)
+			if not hrp.Parent or not alive then conn:Disconnect(); return end
+			local moveStep = math.min(speed * dt, distance - traveled)
+			hrp.CFrame = CFrame.new(hrp.Position + direction * moveStep, hrp.Position + direction * moveStep + hrp.CFrame.LookVector)
+			traveled = traveled + moveStep
+			if traveled >= distance then conn:Disconnect() end
+		end)
+	end
+
 	local function computeAndFollow()
 		if not alive or not humanoid.RootPart then return end
 		local startPos = humanoid.RootPart.Position
-		local endPos   = (typeof(target)=="Vector3" and target)
-			or (target and target.Position)
+		local endPos   = (typeof(target)=="Vector3" and target) or (target and target.Position)
 		if not endPos then return end
 
 		local path = PathfindingService:CreatePath(agentParms)
 		path:ComputeAsync(startPos, endPos)
+		if path.Status ~= Enum.PathStatus.Success then return end
 
-		if path.Status ~= Enum.PathStatus.Success then
-			return -- just retry next loop
-		end
-
+		-- Follow waypoints smoothly
 		for _, wp in ipairs(path:GetWaypoints()) do
 			if not alive then return end
 
@@ -134,19 +148,18 @@ function Pathfind(humanoid, target, opts)
 				humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
 			end
 
-			humanoid:MoveTo(wp.Position)
+			-- Use WalkSpeed for smooth movement
+			local speed = humanoid.WalkSpeed or 16
+			SmoothMove(humanoid.RootPart, wp.Position, speed)
 
-			-- wait with timeout so it doesn’t hang forever
-			local reached = humanoid.MoveToFinished:Wait(2) -- wait up to 2 seconds
-
-			if not reached then
-				-- If it failed, just stop this path early and recompute
-				return
-			end
+			-- Wait until close enough
+			local timeout = tick() + 2
+			repeat
+				task.wait(0.01)
+			until (humanoid.RootPart.Position - wp.Position).Magnitude < 1 or tick() > timeout
 		end
 	end
 
-	-- start the loop
 	task.spawn(function()
 		while alive do
 			computeAndFollow()
@@ -154,12 +167,8 @@ function Pathfind(humanoid, target, opts)
 		end
 	end)
 
-	-- the stop function
 	local function stop()
 		alive = false
-		if humanoid.RootPart then
-			humanoid:MoveTo(humanoid.RootPart.Position)
-		end
 	end
 
 	activePaths[humanoid] = stop
@@ -290,8 +299,9 @@ function PerformElliotAI()
 	local Network = game:GetService("ReplicatedStorage").Modules.Network
 	local TextService = game:GetService("TextChatService")
 	local SRV, KLR = workspace.Players.Survivors, workspace.Players.Killers
+	local RunService = game:GetService("RunService")
 
-	local lastHitTime, pizzaCD, scareRadius = 0, 0, 55
+	local lastHitTime, pizzaCD, scareRadius = 0, 0, 45
 	local pizzaHeal = 35
 	local CycleOrder = {"Supports", "Sentinels", "Survivalists"}
 
@@ -333,7 +343,6 @@ function PerformElliotAI()
 		end
 	end
 
-	-- Get nearest killer and distance
 	local function getNearestKiller()
 		if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return nil, math.huge end
 		local closest, minDist = nil, math.huge
@@ -350,7 +359,6 @@ function PerformElliotAI()
 		return closest, minDist
 	end
 
-	-- Killer proximity check (ignore if healing injured)
 	local function isKillerClose(range)
 		range = range or scareRadius
 		if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return false end
@@ -372,7 +380,6 @@ function PerformElliotAI()
 		return false
 	end
 
-	-- Rebuild target list
 	local function rebuildOrderedTargets()
 		orderedTargets = {}
 		for _, category in ipairs(CycleOrder) do
@@ -436,12 +443,37 @@ function PerformElliotAI()
 		return closest
 	end
 
-	local function forceWalkSpeed(speed)
-		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-		if hum then hum.WalkSpeed = speed end
+	local function SmoothMove(hrp, targetPos, speed)
+		if not hrp then return end
+		local startPos = hrp.Position
+		local distance = (targetPos - startPos).Magnitude
+		if distance == 0 then return end
+
+		local direction = (targetPos - startPos).Unit
+		local traveled = 0
+
+		local conn
+		conn = RunService.RenderStepped:Connect(function(dt)
+			if not hrp.Parent then
+				conn:Disconnect()
+				return
+			end
+			local moveStep = math.min(speed * dt, distance - traveled)
+			hrp.CFrame = CFrame.new(hrp.Position + direction * moveStep, hrp.Position + direction * moveStep + hrp.CFrame.LookVector)
+			traveled = traveled + moveStep
+			if traveled >= distance then
+				conn:Disconnect()
+			end
+		end)
 	end
 
-	-- Rush Hour on damage
+	local function forceMoveTo(targetPos, speed)
+		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+			SmoothMove(player.Character.HumanoidRootPart, targetPos, speed)
+		end
+	end
+
+	-- Rush on damage
 	if player.Character and player.Character:FindFirstChild("Humanoid") then
 		player.Character.Humanoid.HealthChanged:Connect(function(hp)
 			if lastHealth and hp < lastHealth then
@@ -457,40 +489,39 @@ function PerformElliotAI()
 		end)
 	end
 
-	-- Main loop
+	-- Main AI loop
 	while GameState == "Ingame" and BotToggle.CurrentValue do
 		rebuildOrderedTargets()
 
-		-- Heal injured survivor first
+		-- Heal injured first
 		local injured = pickClosestInjured()
 		if injured then
 			switchToTarget(injured)
 			if not sprinting then
 				sprinting = true
 				Sprint(true)
-				forceWalkSpeed(26)
 			end
 		else
-			-- Default target cycling
 			if not currentTarget and #orderedTargets > 0 then
 				currentIndex = 1
 				switchToTarget(orderedTargets[currentIndex])
 			end
 		end
 
-		-- Scared flee logic
+		-- Scared flee
 		if isKillerClose() then
 			local farTarget = pickFarthestTarget(true)
 			if farTarget then
 				switchToTarget(farTarget)
-				sprinting = true
-				Sprint(true)
-				forceWalkSpeed(26)
+				if not sprinting then
+					sprinting = true
+					Sprint(true)
+				end
 				ChatRandomMessage("Scared")
 			end
 		end
 
-		-- Pizza throw prediction
+		-- Pizza throw
 		if currentTarget and currentTarget:FindFirstChild("HumanoidRootPart") and currentTarget:FindFirstChild("Humanoid") then
 			local pr = player.Character.HumanoidRootPart.Position
 			local hum = currentTarget.Humanoid
@@ -515,7 +546,11 @@ function PerformElliotAI()
 			stamina = math.min(STAMINA_MAX, stamina + STAMINA_GAIN*checkInterval)
 		end
 
-		forceWalkSpeed(sprinting and 26 or 16)
+		-- Move manually towards current target
+		if currentTarget and currentTarget:FindFirstChild("HumanoidRootPart") then
+			local speed = sprinting and 26 or 16
+			forceMoveTo(currentTarget.HumanoidRootPart.Position, speed)
+		end
 
 		-- Stuck detection
 		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
