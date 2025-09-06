@@ -7,7 +7,7 @@ local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 local Window = Rayfield:CreateWindow({
 	Name = "Forsaken Bot",
 	Icon = "square-dashed-bottom-code", -- Icon in Topbar. Can use Lucide Icons (string) or Roblox Image (number). 0 to use no icon (default).
-	LoadingTitle = "Forsaken Bot - v0.01",
+	LoadingTitle = "Forsaken Bot - v0.02",
 	LoadingSubtitle = "Made by @g_rd#0",
 	ShowText = "Rayfield", -- for mobile users to unhide rayfield, change if you'd like
 	Theme = "DarkBlue", -- Check https://docs.sirius.menu/rayfield/configuration/themes
@@ -166,25 +166,12 @@ function Pathfind(humanoid, target, opts)
 	return stop
 end
 
-local function Sprint(enable)
-	-- closure caches
-	local cache = Sprint.__cache
-	if not cache then
-		cache = {
-			lastCharacter = nil,
-			animator = nil,
-			humanoid = nil,
-			baseWalkSpeed = 16,
-			tracks = {}, -- map id -> AnimationTrack
-			anims = {
-				Idle = "rbxassetid://134624270247120",
-				Walk = "rbxassetid://132377038617766",
-				Run  = "rbxassetid://115946474977409",
-			},
-			sprintMultiplier = 26 / 16, -- target sprint speed relative to base (26 was used in decompiles)
-		}
-		Sprint.__cache = cache
-	end
+-- local cache outside the function
+local SprintCache = {}
+
+function Sprint(enable)
+	-- use the cache
+	local cache = SprintCache
 
 	-- refresh character/humanoid/animator if changed
 	local char = player.Character
@@ -193,6 +180,7 @@ local function Sprint(enable)
 		cache.tracks = {}
 		cache.animator = nil
 		cache.humanoid = nil
+		cache.baseWalkSpeed = 16
 		if char then
 			cache.humanoid = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
 			cache.animator = cache.humanoid and (cache.humanoid:FindFirstChildOfClass("Animator") or cache.humanoid:WaitForChild("Animator", 5))
@@ -207,7 +195,15 @@ local function Sprint(enable)
 	local hum = cache.humanoid
 	local animator = cache.animator
 
-	-- helper to ensure a track exists
+	-- animations
+	cache.anims = cache.anims or {
+		Idle = "rbxassetid://134624270247120",
+		Walk = "rbxassetid://132377038617766",
+		Run  = "rbxassetid://115946474977409",
+	}
+	cache.sprintMultiplier = cache.sprintMultiplier or (26 / 16)
+	cache.tracks = cache.tracks or {}
+
 	local function ensureTrack(id)
 		if not animator then return nil end
 		if cache.tracks[id] then return cache.tracks[id] end
@@ -221,9 +217,7 @@ local function Sprint(enable)
 		return nil
 	end
 
-	-- play/stop helper
 	local function playOnly(trackToPlay)
-		-- stop other movement-related tracks
 		for k, t in pairs(cache.tracks) do
 			if t ~= trackToPlay and t.IsPlaying then
 				pcall(function() t:Stop() end)
@@ -237,12 +231,10 @@ local function Sprint(enable)
 	if not hum then return end
 
 	if enable then
-		-- set sprint speed and play run anim if moving
 		hum.WalkSpeed = cache.baseWalkSpeed * cache.sprintMultiplier
 		local runTrack = ensureTrack(cache.anims.Run)
 		playOnly(runTrack)
 	else
-		-- restore walk speed and play appropriate anim depending on movement
 		hum.WalkSpeed = cache.baseWalkSpeed
 		local moveMag = 0
 		if hum.RootPart and hum.MoveDirection then
