@@ -7,7 +7,7 @@ local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 local Window = Rayfield:CreateWindow({
 	Name = "Forsaken Bot",
 	Icon = "square-dashed-bottom-code", -- Icon in Topbar. Can use Lucide Icons (string) or Roblox Image (number). 0 to use no icon (default).
-	LoadingTitle = "Forsaken Bot - v0.04",
+	LoadingTitle = "Forsaken Bot - v0.05",
 	LoadingSubtitle = "Made by @g_rd#0",
 	ShowText = "Rayfield", -- for mobile users to unhide rayfield, change if you'd like
 	Theme = "DarkBlue", -- Check https://docs.sirius.menu/rayfield/configuration/themes
@@ -270,7 +270,7 @@ function PerformElliotAI()
 	local Network = game:GetService("ReplicatedStorage").Modules.Network
 	local TextService = game:GetService("TextChatService")
 
-	local lastHitTime, pizzaCD, scareRadius = 0, 0, 7
+	local lastHitTime, pizzaCD, scareRadius = 0, 0, 45 -- increased radius
 	local pizzaHeal = 35
 	local CycleOrder = {"Supports", "Sentinels", "Survivalists"}
 
@@ -285,7 +285,7 @@ function PerformElliotAI()
 	local stuckTimeout = 0.5
 
 	local STAMINA_MAX, STAMINA_DRAIN, STAMINA_GAIN = 100, 10, 20
-	local RESERVE, STOP_THRESHOLD, START_THRESHOLD = 2, 15, 60
+	local RESERVE, STOP_THRESHOLD, START_THRESHOLD = 3, 10, 60
 	local stamina = STAMINA_MAX
 	local sprinting = false
 
@@ -296,48 +296,16 @@ function PerformElliotAI()
 	local lastRushUse, lastDepletedTime = 0, nil
 	local lastChatTimes = {Throwing = 0, Hurt = 0, Scared = 0}
 
+	-- Messages
 	local ElliotMessages = {
-		Throwing = {
-			"GET THE PIZZA",
-			"GRAB THE PIZZA",
-			"PLEASE GET THIS",
-			"istg if you dont get this",
-			"HURRY UP WITH IT",
-			"DON'T DROP IT",
-			"HERE COMES THE PIZZA",
-			"CATCH IT!",
-			"TAKE THE PIZZA QUICK",
-			"I NEED THAT PIZZA NOW"
-		},
-		Hurt = {
-			"ow :((",
-			"OWWW",
-			"oww",
-			"HEY >:(",
-			"MY ARM!",
-			"OUCH!",
-			"I'M HURT",
-			"NOT COOL!",
-			"I CAN'T TAKE THIS",
-			"YOWCH!"
-		},
-		Scared = {
-			"okay im getting outta here",
-			"OKAY BYEBYE",
-			"NOT DEALING WITH THIS GUY",
-			"time to not do my job :D",
-			"RUNNING AWAY!",
-			"I'M OUT!",
-			"NOPE NOT TODAY",
-			"CAN'T FIGHT THIS",
-			"SEE YA!",
-			"BETTER GET SOME DISTANCE"
-		}
+		Throwing = {"GET THE PIZZA","GRAB THE PIZZA","PLEASE GET THIS","istg if you dont get this","HURRY UP WITH IT","DON'T DROP IT","HERE COMES THE PIZZA","CATCH IT!","TAKE THE PIZZA QUICK","I NEED THAT PIZZA NOW"},
+		Hurt = {"ow :((","OWWW","oww","HEY >:(","MY ARM!","OUCH!","I'M HURT","NOT COOL!","I CAN'T TAKE THIS","YOWCH!"},
+		Scared = {"okay im getting outta here","OKAY BYEBYE","NOT DEALING WITH THIS GUY","time to not do my job :D","RUNNING AWAY!","I'M OUT!","NOPE NOT TODAY","CAN'T FIGHT THIS","SEE YA!","BETTER GET SOME DISTANCE"}
 	}
 
 	local function ChatRandomMessage(messageType)
 		local now = tick()
-		if now - (lastChatTimes[messageType] or 0) >= 15 then
+		if now - (lastChatTimes[messageType] or 0) >= 20 then -- 20s throttle
 			local channel = TextService.TextChannels:FindFirstChild("RBXGeneral")
 			if channel then
 				local msgTable = ElliotMessages[messageType]
@@ -353,18 +321,29 @@ function PerformElliotAI()
 
 	local SRV, KLR = workspace.Players.Survivors, workspace.Players.Killers
 
+	-- Updated killer proximity check
 	local function isKillerClose(range)
 		range = range or scareRadius
 		if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return false end
 		for _, killer in pairs(KLR:GetChildren()) do
 			if killer:FindFirstChild("HumanoidRootPart") then
-				local d = (killer.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
-				if d <= range then return true end
+				-- Check for nearby injured survivor Elliot is targeting
+				for _, s in pairs(SRV:GetChildren()) do
+					if s:FindFirstChild("HumanoidRootPart") and s:FindFirstChild("Humanoid") and s.Humanoid.Health < s.Humanoid.MaxHealth then
+						if currentTarget == s and (killer.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude <= range then
+							return false -- ignore scare if healing injured survivor nearby
+						end
+					end
+				end
+				if (killer.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude <= range then
+					return true
+				end
 			end
 		end
 		return false
 	end
 
+	-- Helper functions
 	local function rebuildOrderedTargets()
 		orderedTargets = {}
 		for _, category in ipairs(CycleOrder) do
@@ -378,11 +357,8 @@ function PerformElliotAI()
 				end
 			end
 		end
-		if #orderedTargets == 0 then
-			currentIndex = 1
-		else
-			if currentIndex > #orderedTargets then currentIndex = 1 end
-		end
+		if #orderedTargets == 0 then currentIndex = 1
+		else if currentIndex > #orderedTargets then currentIndex = 1 end end
 	end
 
 	local function switchToTarget(newTarget)
@@ -392,19 +368,19 @@ function PerformElliotAI()
 		lastTargetSwitch = tick()
 		if currentTarget and currentTarget:FindFirstChild("HumanoidRootPart") then
 			local success, stopFunc = pcall(function()
-				-- Pathfind regardless of sprinting; always try to follow target
 				return Pathfind(player.Character.Humanoid, currentTarget.HumanoidRootPart, {recomputeDelay = 0.1, closeEnough = 2})
 			end)
 			if success and type(stopFunc) == "function" then currentPathStop = stopFunc end
 		end
 	end
 
-	local function pickFarthestTarget()
+	local function pickFarthestTarget(ignoreInjured)
 		local farthest, farD = nil, nil
 		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
 			local pos = player.Character.HumanoidRootPart.Position
 			for _, s in ipairs(orderedTargets) do
-				if s and s:FindFirstChild("HumanoidRootPart") then
+				if s and s:FindFirstChild("HumanoidRootPart") and s:FindFirstChild("Humanoid") then
+					if ignoreInjured and s.Humanoid.Health < s.Humanoid.MaxHealth then continue end
 					local d = (s.HumanoidRootPart.Position - pos).Magnitude
 					if not farthest or d > farD then farthest, farD = s, d end
 				end
@@ -412,12 +388,28 @@ function PerformElliotAI()
 		end
 		return farthest
 	end
+	
+	-- Returns the nearest killer and the distance to them
+	local function getNearestKiller()
+		if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return nil, math.huge end
+		local closest, minDist = nil, math.huge
+		local pos = player.Character.HumanoidRootPart.Position
+		for _, killer in pairs(workspace.Players.Killers:GetChildren()) do
+			if killer:FindFirstChild("HumanoidRootPart") then
+				local d = (killer.HumanoidRootPart.Position - pos).Magnitude
+				if d < minDist then
+					closest = killer
+					minDist = d
+				end
+			end
+		end
+		return closest, minDist
+	end
+
 
 	local function forceWalkSpeed(speed)
 		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-		if hum then
-			hum.WalkSpeed = speed
-		end
+		if hum then hum.WalkSpeed = speed end
 	end
 
 	-- Rush Hour on damage
@@ -445,13 +437,11 @@ function PerformElliotAI()
 			if hum then hum.Health = 0 end
 		end
 
-		-- Ensure target exists
 		if not currentTarget and #orderedTargets > 0 then
 			currentIndex = 1
 			switchToTarget(orderedTargets[currentIndex])
 		end
 
-		-- Stamina logic
 		local moving = currentPathStop ~= nil
 		if sprinting and moving then
 			stamina = math.max(RESERVE, stamina - STAMINA_DRAIN*checkInterval)
@@ -467,12 +457,8 @@ function PerformElliotAI()
 			end
 		end
 
-		-- Always enforce state WalkSpeed regardless of other effects
-		if sprinting then
-			forceWalkSpeed(26)
-		else
-			forceWalkSpeed(16)
-		end
+		-- Enforce sprint speed absolutely
+		forceWalkSpeed(sprinting and 26 or 16)
 
 		if not sprinting and stamina >= START_THRESHOLD and currentTarget then
 			sprinting = true
@@ -480,50 +466,34 @@ function PerformElliotAI()
 			if not currentPathStop then switchToTarget(currentTarget) end
 		end
 
-		-- Cycle targets if proximity
-		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-			local pr = player.Character.HumanoidRootPart.Position
-			for i, s in ipairs(orderedTargets) do
-				if s and s:FindFirstChild("HumanoidRootPart") then
-					local d = (s.HumanoidRootPart.Position - pr).Magnitude
-					if d <= proximitySwitchRange and s ~= currentTarget then
-						currentIndex = i
-						switchToTarget(s)
-						break
-					end
-				end
-			end
-		end
-
-		-- Scared behavior
+		-- Scared behaviour with updated ignore logic
 		local scared = isKillerClose() or (tick() - lastHitTime <= 10)
 		if scared then
 			ChatRandomMessage("Scared")
-			local farTarget = pickFarthestTarget()
+			local farTarget = pickFarthestTarget(true)
 			if farTarget and farTarget ~= currentTarget then
 				switchToTarget(farTarget)
 				sprinting = true
 				Sprint(true)
 				forceWalkSpeed(26)
-				task.wait(math.random(1,3)) -- briefly move away
+				task.wait(math.random(1,3))
 				sprinting = false
 				Sprint(false)
 				forceWalkSpeed(16)
-				-- return to normal target after fleeing
-				if #orderedTargets > 0 then
-					currentIndex = 1
-					switchToTarget(orderedTargets[currentIndex])
-				end
+				local injured = pickFarthestTarget(false)
+				if injured then switchToTarget(injured) end
 			end
 		end
 
-		-- Pizza throw logic
+		-- Pizza throw prediction ahead of target
 		if currentTarget and currentTarget:FindFirstChild("HumanoidRootPart") and currentTarget:FindFirstChild("Humanoid") then
 			local pr = player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character.HumanoidRootPart.Position
 			if pr then
-				local d = (currentTarget.HumanoidRootPart.Position - pr).Magnitude
 				local hum = currentTarget.Humanoid
-				if d >= pizzaRangeMin and d <= pizzaRangeMax and hum.Health <= (hum.MaxHealth - pizzaHeal) and tick() >= pizzaCD then
+				local dist = (currentTarget.HumanoidRootPart.Position - pr).Magnitude
+				if dist >= pizzaRangeMin and dist <= pizzaRangeMax and hum.Health <= (hum.MaxHealth - pizzaHeal) and tick() >= pizzaCD then
+					local vel = currentTarget.HumanoidRootPart.AssemblyLinearVelocity
+					local predPos = currentTarget.HumanoidRootPart.Position + vel * 0.6 -- aim slightly ahead
 					Network.RemoteEvent:FireServer("UseActorAbility","ThrowPizza")
 					ChatRandomMessage("Throwing")
 					pizzaCD = tick() + pizzaCooldown
@@ -539,7 +509,7 @@ function PerformElliotAI()
 			else lastMoveTime = tick() end
 			lastRootPos = rp
 			if currentPathStop and (tick() - lastMoveTime) >= stuckTimeout then
-				pcall(function() currentPathStop() end)
+				pcall(currentPathStop)
 				currentPathStop = nil
 				pcall(function() player.Character.Humanoid:MoveTo(rp) end)
 			end
@@ -550,7 +520,6 @@ function PerformElliotAI()
 
 	if currentPathStop then pcall(currentPathStop); currentPathStop = nil end
 end
-
 
 -- CODE --
 
