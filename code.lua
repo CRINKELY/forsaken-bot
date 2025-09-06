@@ -7,7 +7,7 @@ local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 local Window = Rayfield:CreateWindow({
 	Name = "Forsaken Bot",
 	Icon = "square-dashed-bottom-code", -- Icon in Topbar. Can use Lucide Icons (string) or Roblox Image (number). 0 to use no icon (default).
-	LoadingTitle = "Forsaken Bot - v0.02",
+	LoadingTitle = "Forsaken Bot - v0.03",
 	LoadingSubtitle = "Made by @g_rd#0",
 	ShowText = "Rayfield", -- for mobile users to unhide rayfield, change if you'd like
 	Theme = "DarkBlue", -- Check https://docs.sirius.menu/rayfield/configuration/themes
@@ -170,7 +170,6 @@ end
 local SprintCache = {}
 
 function Sprint(enable)
-	-- use the cache
 	local cache = SprintCache
 
 	-- refresh character/humanoid/animator if changed
@@ -194,18 +193,26 @@ function Sprint(enable)
 
 	local hum = cache.humanoid
 	local animator = cache.animator
+	if not hum or not animator then return end
 
-	-- animations
-	cache.anims = cache.anims or {
-		Idle = "rbxassetid://134624270247120",
-		Walk = "rbxassetid://132377038617766",
+	-- animations sets
+	cache.normalAnims = cache.normalAnims or {
+		Idle = "rbxassetid://131082534135875",
+		Walk = "rbxassetid://108018357044094",
+		Run  = "rbxassetid://136252471123500",
+	}
+	cache.injuredAnims = cache.injuredAnims or {
+		Idle = "rbxassetid://132377038617766",
+		Walk = "rbxassetid://134624270247120",
 		Run  = "rbxassetid://115946474977409",
 	}
 	cache.sprintMultiplier = cache.sprintMultiplier or (26 / 16)
 	cache.tracks = cache.tracks or {}
 
+	-- choose animation set depending on health
+	local animSet = hum.Health < (hum.MaxHealth * 0.5) and cache.injuredAnims or cache.normalAnims
+
 	local function ensureTrack(id)
-		if not animator then return nil end
 		if cache.tracks[id] then return cache.tracks[id] end
 		local anim = Instance.new("Animation")
 		anim.AnimationId = id
@@ -218,7 +225,7 @@ function Sprint(enable)
 	end
 
 	local function playOnly(trackToPlay)
-		for k, t in pairs(cache.tracks) do
+		for _, t in pairs(cache.tracks) do
 			if t ~= trackToPlay and t.IsPlaying then
 				pcall(function() t:Stop() end)
 			end
@@ -228,27 +235,18 @@ function Sprint(enable)
 		end
 	end
 
-	if not hum then return end
-
 	if enable then
 		hum.WalkSpeed = cache.baseWalkSpeed * cache.sprintMultiplier
-		local runTrack = ensureTrack(cache.anims.Run)
-		playOnly(runTrack)
+		playOnly(ensureTrack(animSet.Run))
 	else
 		hum.WalkSpeed = cache.baseWalkSpeed
-		local moveMag = 0
-		if hum.RootPart and hum.MoveDirection then
-			moveMag = hum.MoveDirection.Magnitude * hum.WalkSpeed
-		end
+		local moveMag = hum.MoveDirection and hum.MoveDirection.Magnitude * hum.WalkSpeed or 0
 		if moveMag == 0 then
-			local idleTrack = ensureTrack(cache.anims.Idle)
-			playOnly(idleTrack)
+			playOnly(ensureTrack(animSet.Idle))
 		elseif moveMag > 0 and moveMag < 17 then
-			local walkTrack = ensureTrack(cache.anims.Walk)
-			playOnly(walkTrack)
+			playOnly(ensureTrack(animSet.Walk))
 		else
-			local runTrack = ensureTrack(cache.anims.Run)
-			playOnly(runTrack)
+			playOnly(ensureTrack(animSet.Run))
 		end
 	end
 end
@@ -270,6 +268,7 @@ end
 
 function PerformElliotAI()
 	local Network = game:GetService("ReplicatedStorage").Modules.Network
+	local TextService = game:GetService("TextChatService")
 
 	local lastHitTime, pizzaCD, scareRadius = 0, 0, 7
 	local pizzaHeal = 35
@@ -285,41 +284,43 @@ function PerformElliotAI()
 	local stuckMoveThreshold = 0.5
 	local stuckTimeout = 0.5
 
-	local SRV = workspace.Players.Survivors
-	local KLR = workspace.Players.Killers
-
-	-- stamina config + thresholds
-	local STAMINA_MAX = 100
-	local STAMINA_DRAIN = 10   -- per second while sprinting (matches your variable)
-	local STAMINA_GAIN = 20    -- per second when not sprinting
-	local RESERVE = 2          -- never drop below this
-	local STOP_THRESHOLD = 15  -- when to stop sprinting and regen
-	local START_THRESHOLD = 60 -- when to resume sprinting
-
+	-- Stamina
+	local STAMINA_MAX, STAMINA_DRAIN, STAMINA_GAIN = 100, 10, 20
+	local RESERVE, STOP_THRESHOLD, START_THRESHOLD = 2, 15, 60
 	local stamina = STAMINA_MAX
 	local sprinting = false
 
-	-- State (copied from your AI)
 	local orderedTargets = {}
-	local currentIndex = 1
-	local currentTarget = nil
-	local currentPathStop = nil
-	local lastTargetSwitch = 0
-	local lastRootPos = nil
-	local lastMoveTime = tick()
+	local currentIndex, currentTarget, currentPathStop = 1, nil, nil
+	local lastTargetSwitch, lastRootPos, lastMoveTime = 0, nil, tick()
 	local lastHealth = player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health or nil
-	local lastRushUse = 0
-	local lastDepletedTime = nil
-	
+	local lastRushUse, lastDepletedTime = 0, nil
+	local lastChatTimes = {Throwing = 0, Hurt = 0, Scared = 0}
+
 	local ElliotMessages = {
-		["Throwing"] = {"GET THE PIZZA", "GRAB THE PIZZA", "PLEASE GET THIS", "istg if you dont get this"},
-		["Hurt"] = {"ow :((", "OWWW", "oww", "HEY >:("},
-		["Scared"] = {"okay im getting outta here", "OKAY BYEBYE", "NOT DEALING WITH THIS GUY", "time to not do my job :D"}
+		Throwing = {"GET THE PIZZA","GRAB THE PIZZA","PLEASE GET THIS","istg if you dont get this"},
+		Hurt     = {"ow :((","OWWW","oww","HEY >:("},
+		Scared   = {"okay im getting outta here","OKAY BYEBYE","NOT DEALING WITH THIS GUY","time to not do my job :D"}
 	}
-	
+
 	local function ChatRandomMessage(messageType)
-		game:GetService("TextChatService").TextChannels:WaitForChild("RBXGeneral"):SendAsync(ElliotMessages[messageType][math.random(1, #ElliotMessages[messageType])])
+		local now = tick()
+		-- throttle: 5 sec minimum between same type messages
+		if now - (lastChatTimes[messageType] or 0) >= 5 then
+			local channel = TextService.TextChannels:FindFirstChild("RBXGeneral")
+			if channel then
+				local msgTable = ElliotMessages[messageType]
+				if msgTable and #msgTable > 0 then
+					pcall(function()
+						channel:SendAsync(msgTable[math.random(1,#msgTable)])
+					end)
+					lastChatTimes[messageType] = now
+				end
+			end
+		end
 	end
+
+	local SRV, KLR = workspace.Players.Survivors, workspace.Players.Killers
 
 	local function isKillerClose(range)
 		range = range or scareRadius
@@ -331,19 +332,6 @@ function PerformElliotAI()
 			end
 		end
 		return false
-	end
-
-	local function getNearestKiller()
-		if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return nil, math.huge end
-		local pr = player.Character.HumanoidRootPart.Position
-		local best, bestD = nil, math.huge
-		for _, k in pairs(KLR:GetChildren()) do
-			if k:FindFirstChild("HumanoidRootPart") and k:FindFirstChild("Humanoid") and k.Humanoid.Health > 0 then
-				local d = (k.HumanoidRootPart.Position - pr).Magnitude
-				if d < bestD then best, bestD = k, d end
-			end
-		end
-		return best, bestD
 	end
 
 	local function rebuildOrderedTargets()
@@ -368,93 +356,83 @@ function PerformElliotAI()
 
 	local function switchToTarget(newTarget)
 		if currentTarget == newTarget then return end
-		if currentPathStop then
-			pcall(currentPathStop)
-			currentPathStop = nil
-		end
+		if currentPathStop then pcall(currentPathStop); currentPathStop = nil end
 		currentTarget = newTarget
 		lastTargetSwitch = tick()
 		if currentTarget and currentTarget:FindFirstChild("HumanoidRootPart") then
 			local success, stopFunc = pcall(function()
 				return Pathfind(player.Character.Humanoid, currentTarget.HumanoidRootPart, {recomputeDelay = 0.12})
 			end)
-			if success and type(stopFunc) == "function" then
-				currentPathStop = stopFunc
-			end
+			if success and type(stopFunc) == "function" then currentPathStop = stopFunc end
 		end
 	end
 
-	-- Rush Hour trigger on damage
+	-- Rush Hour on damage
 	if player.Character and player.Character:FindFirstChild("Humanoid") then
 		player.Character.Humanoid.HealthChanged:Connect(function(hp)
 			if lastHealth and hp < lastHealth then
 				lastHitTime = tick()
-				
 				local killer, kd = getNearestKiller()
 				if killer and kd <= rushRange and tick() >= lastRushUse + rushCooldown then
-					Network.RemoteEvent:FireServer("UseActorAbility", "RushHour")
+					Network.RemoteEvent:FireServer("UseActorAbility","RushHour")
 					lastRushUse = tick()
 				end
-				
-				ChatRandomMessage("Chasing")
+				ChatRandomMessage("Hurt")
 			end
 			lastHealth = hp
 		end)
 	end
 
-	-- heartbeat updater to manage stamina & animation loop
-	local accum = 0
-	while GameState == "Ingame" and BotToggle.CurrentValue == true do
-		-- main tick
-		-- compute if currently moving (very simple check: path active)
-		local moving = currentPathStop ~= nil
+	local function pickFarthestTarget()
+		local farthest, farD = nil, nil
+		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+			local pos = player.Character.HumanoidRootPart.Position
+			for _, s in ipairs(orderedTargets) do
+				if s and s:FindFirstChild("HumanoidRootPart") then
+					local d = (s.HumanoidRootPart.Position - pos).Magnitude
+					if not farthest or d > farD then farthest, farD = s, d end
+				end
+			end
+		end
+		return farthest
+	end
 
-		-- stamina update (drain while sprinting, regen otherwise). ensure reserve.
+	-- Main loop
+	while GameState == "Ingame" and BotToggle.CurrentValue == true do
+		rebuildOrderedTargets()
+
+		-- Ensure AI moves even if idle
+		if not currentTarget and #orderedTargets > 0 then
+			currentIndex = 1
+			switchToTarget(orderedTargets[currentIndex])
+		end
+
+		if #SRV:GetChildren() == 1 then
+			player.Character.Humanoid.Health = 0
+		end
+
+		-- Stamina logic
+		local moving = currentPathStop ~= nil
 		if sprinting and moving then
-			stamina = stamina - (STAMINA_DRAIN * checkInterval)
+			stamina = math.max(RESERVE, stamina - STAMINA_DRAIN*checkInterval)
 			if stamina <= RESERVE then
-				stamina = RESERVE
-				-- stop sprint to regen
 				sprinting = false
 				Sprint(false)
 				lastDepletedTime = tick()
-				-- cancel path so pathfind doesn't try to run while regen
-				if currentPathStop then
-					pcall(currentPathStop); currentPathStop = nil
-				end
+				if currentPathStop then pcall(currentPathStop); currentPathStop = nil end
 			end
 		else
-			-- regeneration: if we recently hit reserve, add a small delay before regen
-			if lastDepletedTime and tick() < lastDepletedTime + 0.8 then
-				-- short pause
-			else
-				stamina = math.min(STAMINA_MAX, stamina + (STAMINA_GAIN * checkInterval))
+			if not lastDepletedTime or tick() > lastDepletedTime + 0.8 then
+				stamina = math.min(STAMINA_MAX, stamina + STAMINA_GAIN*checkInterval)
 			end
 		end
-
-		-- If stamina recovered above start threshold and we have target, resume sprinting
 		if not sprinting and stamina >= START_THRESHOLD and currentTarget then
 			sprinting = true
 			Sprint(true)
-			-- ensure we have a path (restart)
-			if not currentPathStop then
-				switchToTarget(currentTarget)
-			end
+			if not currentPathStop then switchToTarget(currentTarget) end
 		end
 
-		-- If we have no target, pick one
-		rebuildOrderedTargets()
-		if #orderedTargets == 0 then
-			if currentPathStop then
-				pcall(currentPathStop)
-				currentPathStop = nil
-				currentTarget = nil
-			end
-			task.wait(checkInterval)
-			continue
-		end
-
-		-- proximity immediate switch
+		-- Proximity switch
 		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
 			local pr = player.Character.HumanoidRootPart.Position
 			for i, s in ipairs(orderedTargets) do
@@ -469,87 +447,46 @@ function PerformElliotAI()
 			end
 		end
 
-		-- cycle target based on hold time or death
-		local shouldAdvance = false
-		if not currentTarget or not currentTarget.Parent or (currentTarget.Humanoid and currentTarget.Humanoid.Health <= 0) then
-			shouldAdvance = true
-		elseif tick() - lastTargetSwitch >= targetHoldTime then
-			shouldAdvance = true
-		end
-		if shouldAdvance and #orderedTargets > 0 then
-			currentIndex = currentIndex + 1
-			if currentIndex > #orderedTargets then currentIndex = 1 end
-			switchToTarget(orderedTargets[currentIndex])
-		end
-
-		if not currentTarget then
-			currentIndex = 1
-			switchToTarget(orderedTargets[currentIndex])
-		end
-
-		-- stuck detection
-		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-			local rp = player.Character.HumanoidRootPart.Position
-			if lastRootPos then
-				if (rp - lastRootPos).Magnitude >= stuckMoveThreshold then
-					lastMoveTime = tick()
-				end
-			else
-				lastMoveTime = tick()
-			end
-			lastRootPos = rp
-
-			if currentPathStop and (tick() - lastMoveTime) >= stuckTimeout then
-				pcall(function() currentPathStop() end)
-				currentPathStop = nil
-				pcall(function() player.Character.Humanoid:MoveTo(rp) end)
+		-- Scared behavior: run to far away survivor briefly
+		local scared = isKillerClose() or (tick() - lastHitTime <= 10)
+		if scared then
+			ChatRandomMessage("Scared")
+			local farTarget = pickFarthestTarget()
+			if farTarget and farTarget ~= currentTarget then
+				switchToTarget(farTarget)
+				sprinting = true
+				Sprint(true)
+				task.wait(math.random(1,3)) -- briefly move to gain distance
+				Sprint(false)
+				sprinting = false
 			end
 		end
 
-		-- pizza throw logic
+		-- Pizza throw logic
 		if currentTarget and currentTarget:FindFirstChild("HumanoidRootPart") and currentTarget:FindFirstChild("Humanoid") then
-			if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-				local d = (currentTarget.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
+			local pr = player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character.HumanoidRootPart.Position
+			if pr then
+				local d = (currentTarget.HumanoidRootPart.Position - pr).Magnitude
 				local hum = currentTarget.Humanoid
 				if d >= pizzaRangeMin and d <= pizzaRangeMax and hum.Health <= (hum.MaxHealth - pizzaHeal) and tick() >= pizzaCD then
-					Network.RemoteEvent:FireServer("UseActorAbility", "ThrowPizza")
-					ChatRandomMessage("Hurt")
+					Network.RemoteEvent:FireServer("UseActorAbility","ThrowPizza")
+					ChatRandomMessage("Throwing")
 					pizzaCD = tick() + pizzaCooldown
 				end
 			end
 		end
 
-		-- scared behaviour: prefer farthest survivor
-		local scared = isKillerClose() or (tick() - lastHitTime <= 10)
-		if scared then
-			ChatRandomMessage("Scared")
-			
-			local farthest, farD
-			
-			if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-				for _, s in ipairs(orderedTargets) do
-					if s and s:FindFirstChild("HumanoidRootPart") then
-						local d = (s.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
-						if not farthest or d > farD then farthest, farD = s, d end
-					end
-				end
-				if farthest and farthest ~= currentTarget then
-					switchToTarget(farthest)
-					for i, s in ipairs(orderedTargets) do if s == farthest then currentIndex = i break end end
-				end
-			end
-		end
-
-		-- If we have a target and enough stamina, ensure sprinting is toggled on so AI moves faster.
-		if currentTarget and currentPathStop then
-			if not sprinting and stamina >= START_THRESHOLD then
-				sprinting = true
-				Sprint(true)
-			elseif sprinting and stamina <= STOP_THRESHOLD then
-				sprinting = false
-				Sprint(false)
-				-- cancel path to allow regen before resuming
-				if currentPathStop then pcall(currentPathStop); currentPathStop = nil end
+		-- Stuck detection
+		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+			local rp = player.Character.HumanoidRootPart.Position
+			if lastRootPos then
+				if (rp - lastRootPos).Magnitude >= stuckMoveThreshold then lastMoveTime = tick() end
+			else lastMoveTime = tick() end
+			lastRootPos = rp
+			if currentPathStop and (tick() - lastMoveTime) >= stuckTimeout then
+				pcall(function() currentPathStop() end)
+				currentPathStop = nil
+				pcall(function() player.Character.Humanoid:MoveTo(rp) end)
 			end
 		end
 
@@ -558,6 +495,7 @@ function PerformElliotAI()
 
 	if currentPathStop then pcall(currentPathStop); currentPathStop = nil end
 end
+
 
 -- CODE --
 
